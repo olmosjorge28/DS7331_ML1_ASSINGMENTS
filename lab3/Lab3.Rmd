@@ -1,0 +1,114 @@
+---
+title: "Lab 3 Project"
+author: "Bo Yun"
+date: "4/9/2021"
+output: html_document
+---
+
+# Data import
+```{r}
+#output csv file generated after cleaning the data
+df=read.csv("~/Desktop/SMU/CSV files/output.csv")
+head(df)
+```
+
+# Changing continuous columns to all categorical values
+```{r}
+library(dplyr)
+library(arules)
+
+# Discretize lead_time and adr to (low, medium, high)
+dfDisc <- discretizeDF(df, methods = list(
+  lead_time = list(method = "frequency", breaks = 3, 
+    labels = c("Low", "Medium", "High")),
+  adr = list(method = "frequency", breaks = 3, 
+    labels = c("Low", "Medium", "High"))
+  ),
+  default = list(method = "none")
+  )
+head(dfDisc)
+
+# Checking adr and lead_time have equally distributed number of data in each bin 
+dfDisc%>%group_by(adr)%>%count()
+dfDisc%>%group_by(lead_time)%>%count()
+
+# Factoring the dataframe
+index <- 1:ncol(dfDisc)
+dfDisc[ , index] <- lapply(dfDisc[ , index], as.factor)
+str(dfDisc)
+
+```
+
+
+```{r}
+# # Turning the dataframe into transaction data type
+# trans <- as(dfDisc, "transactions")
+# 
+# # Now that we have transactions, its time to run the apriori algorithm
+# isets <- apriori(trans, parameter=list(target="frequent", support=0.5))
+# 
+# # sort it and display some of the frequent itemsets from apriori
+# isets <- sort(isets, by="support") 
+# inspect(head(isets, n=10))
+# length(isets)
+# 
+# 
+# # Do same thing, getting only the maximal sets
+# is_max <- isets[is.maximal(isets)]
+# inspect(head(sort(is_max, by="support")))
+# length(is_max)
+# 
+# 
+# # generate some rules from the frequent itemsets
+# rules <- apriori(trans, parameter=list(support=.5, confidence=.9))
+# 
+# inspect(head(rules, n=10))
+# 
+# # print out measures of rule quality
+# quality(head(rules))
+
+
+rules <- apriori(dfDisc,parameter=list(minlen=2, support=.5, confidence=.9), control = list(verbose=F),appearance = list(rhs=c("is_canceled=0","is_canceled=1"),default="lhs"))
+
+quality(rules) <- round(quality(rules), digits=3)
+# Rules are sorted by lift to make high-lift rules appear first
+rules.sorted <- sort(rules, by="lift")
+inspect(rules.sorted)
+
+
+subset.matrix <- is.subset(rules.sorted, rules.sorted)
+subset.matrix[lower.tri(subset.matrix, diag=T)] <- NA
+redundant <- colSums(subset.matrix, na.rm=T) >= 1
+which(redundant)
+length(redundant)
+length(rules.sorted)
+
+rules.pruned <- rules.sorted[!redundant]
+inspect(rules.pruned)
+print(rules.pruned)
+
+# %R rules <- apriori( trans, list(minlen=1, supp=0.01, conf=0.01)
+
+inspect(head(rules, n=100))
+
+# print out measures of rule quality
+quality(head(rules))
+
+# sort out the rules and print additional "interest" measures
+rules <- sort(rules, by="lift")
+inspect(head(rules, n=10))
+interestMeasure(rules[1:10], method=c("phi", "gini"), trans=trans)
+```
+
+
+```{r}
+library(arulesViz)
+plot(rules)
+```
+
+```{r}
+# a great plot
+plot(rules, method="grouped")
+inspect(rules)
+length(rules)
+```
