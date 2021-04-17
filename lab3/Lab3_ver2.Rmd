@@ -1,0 +1,365 @@
+---
+title: "Lab3_Ver2"
+author: "Bo Yun"
+date: "4/17/2021"
+output: html_document
+---
+
+
+# Importing Data and cleaning
+```{r}
+library(dplyr)
+library(arules)
+library(arulesViz)
+library(RColorBrewer)
+
+bookings=read.csv("https://raw.githubusercontent.com/olmosjorge28/DS7331_ML1_ASSINGMENTS/main/hotel_bookings.csv")
+bookings
+
+###################### Deleting unnecessary variables  ###########################
+bookings <- subset(bookings, select = -c(agent, country,company,meal,arrival_date_week_number, reservation_status_date))
+
+
+###################### Outliers ###########################
+# Boxplot of stays_in_weekend_nights and stays_in_week_nights
+boxplot(bookings$stays_in_weekend_nights) # Very skewed
+boxplot(bookings$stays_in_week_nights)  # Very skewed
+
+
+# Identifying outliers in stays_in_weekend_nights, stays_in_week 
+outliers1 <- boxplot(bookings$stays_in_weekend_nights, plot=FALSE)$out
+outliers2 <- boxplot(bookings$stays_in_week_nights, plot=FALSE)$out
+length(outliers1) # Total of 265 outliers identified
+length(outliers2)
+
+bookings<- bookings[-which(bookings$stays_in_weekend_nights %in% outliers1),]
+bookings<- bookings[-which(bookings$stays_in_week_nights %in% outliers2),]
+
+################### Changing binary values to Yes and No #####################
+bookings$is_canceled <- ifelse(bookings$is_canceled == 1, "Yes", "No")
+bookings$is_repeated_guest <- ifelse(bookings$is_repeated_guest == 1, "Yes", "No")
+```
+
+```{r}
+# Discretizing certain variables into small bins
+bookings <- discretizeDF(bookings, methods = list(
+  lead_time = list(method = "frequency", breaks = 3, 
+    labels = c("Low", "Medium", "High")),
+  adr = list(method = "frequency", breaks = 3, 
+    labels = c("Low", "Medium", "High")),
+  stays_in_week_nights = list(method = "frequency", breaks = 3, 
+    labels = c("Low", "Medium", "High"))
+  ),
+  default = list(method = "none")
+  )
+
+
+bookings$monthNum <- match(bookings$arrival_date_month, month.name)
+bookings$fullDate <- as.Date(with(bookings, paste(arrival_date_year, monthNum, arrival_date_day_of_month,sep="-")), "%Y-%m-%d")
+bookings$weekday <- weekdays(bookings$fullDate)
+bookings <- subset(bookings, select=-c(monthNum,fullDate,arrival_date_day_of_month))
+bookings$weekday
+bookings
+
+# Assigning seasons to arrival_date_month
+bookings <- bookings %>% 
+  mutate(arrival_date_month = case_when(
+    arrival_date_month %in% c('December','January', 'February') ~ 'Winter',
+    arrival_date_month %in% c('March','April', 'May') ~ 'Spring',
+    arrival_date_month %in% c( 'June','July','August') ~ 'Summer',
+    arrival_date_month %in% c('September','October', 'November') ~ 'Fall'
+  ))
+
+summary(bookings$lead_time)
+
+bookings<-subset(bookings, select=-(arrival_date_year))
+
+# Factoring the dataframe
+index <- 1:ncol(bookings)
+bookings[ , index] <- lapply(bookings[ , index], as.factor)
+str(bookings)
+
+trans <- as(bookings, "transactions") # now the transaction data is ready for analysis
+trans
+```
+
+```{r}
+# The most frequent items
+itemFrequencyPlot(trans,topN=20,type="absolute",col=brewer.pal(8,'Pastel2'), main="Absolute Item Frequency Plot")
+itemFrequencyPlot(trans,topN=20,type="relative",col=brewer.pal(8,'Pastel2'), main="Relative Item Frequency Plot")
+```
+
+
+# Rules for LHS(All the variables) vs RHS(ADR)
+```{r}
+rules <- apriori(trans,parameter=list(minlen=2,maxlen=5, support=.005, confidence=.9), control = list(verbose=F),appearance = list(rhs=c("adr=Low","adr=Medium","adr=High"),default="lhs"))
+summary(rules)
+rules_lift <- sort(rules, by="lift")
+rules_pruned <- rules_lift[!is.redundant(rules_lift, measure="lift")]
+rules_pruned <- rules_pruned[quality(rules_pruned)$lift > 2.95]
+
+length(rules_pruned)
+inspect(rules_pruned, by="lift")
+
+
+# Plots
+plot(rules_pruned, method="two-key plot") # The two-key plot uses support and confidence on x and y-axis respectively. It uses order for coloring. The order is the number of items in the rule.
+plot(rules_pruned, method="grouped")
+plot(rules_pruned, method="graph")
+plot(rules_pruned, method="grouped matrix")
+plot(rules_pruned, method="matrix3D")
+plot(rules_pruned, method="paracoord", control = list(reorder = TRUE))
+
+
+```
+
+
+# Rules for LHS(All the variables) vs RHS(is_canceled)
+```{r}
+rules <- apriori(trans,parameter=list(minlen=2, maxlen=5,support=.005, confidence=.9), control = list(verbose=F),appearance = list(rhs=c("is_canceled=No","is_canceled=Yes"),default="lhs"))
+
+summary(rules)
+rules_lift <- sort(rules, by="lift")
+rules_pruned <- rules_lift[!is.redundant(rules_lift, measure="lift")]
+length(rules_pruned)
+inspect(rules_pruned,by="lift")
+
+# Plots
+plot(rules_pruned, method="two-key plot") # The two-key plot uses support and confidence on x and y-axis respectively. It uses order for coloring. The order is the number of items in the rule.
+plot(rules_pruned, method="grouped")
+plot(rules_pruned, method="graph")
+plot(rules_pruned, method="grouped matrix")
+plot(rules_pruned, method="matrix3D")
+plot(rules_pruned, method="paracoord")
+```
+
+# Rules for LHS(All the variables) vs RHS(Hotel - Resort)
+```{r}
+
+rules <- apriori(trans,parameter=list(minlen=4,maxlen=5, support=.005, confidence=.9), control = list(verbose=F),appearance = list(rhs=c("hotel=Resort Hotel"),default="lhs"))
+
+summary(rules)
+rules_lift <- sort(rules, by="lift")
+# plot(rules_lift, method="grouped matrix")
+rules_pruned <- rules_lift[!is.redundant(rules_lift, measure="lift")]
+rules_pruned <- rules_pruned[quality(rules_pruned)$lift>3.0]
+summary(rules_pruned)
+
+length(rules_pruned)
+inspect(rules_pruned, by="lift")
+
+
+# Plots
+plot(rules_pruned, method="two-key plot") # The two-key plot uses support and confidence on x and y-axis respectively. It uses order for coloring. The order is the number of items in the rule.
+plot(rules_pruned, method="grouped")
+plot(rules_pruned, method="graph")
+plot(rules_pruned, method="grouped matrix")
+plot(rules_pruned, method="matrix3D")
+plot(rules_pruned, method="paracoord", control = list(reorder = TRUE))
+```
+
+# Rules for LHS(Cancellation related variables) vs RHS(Hotel - Resort)
+```{r}
+trans_cancel <- as(bookings[bookings$is_canceled == "Yes", ], "transactions")
+
+rules <- apriori(trans_cancel,parameter=list(minlen=2,maxlen=5, support=.005, confidence=.9), control = list(verbose=F),appearance = list(rhs=c("hotel=Resort Hotel"),default="lhs"))
+
+summary(rules)
+rules_lift <- sort(rules, by="lift")
+# plot(rules_lift, method="grouped matrix")
+rules_pruned <- rules_lift[!is.redundant(rules_lift, measure="lift")]
+rules_pruned <- rules_pruned[quality(rules_pruned)$lift>4.05 ]
+summary(rules_pruned)
+
+length(rules_pruned)
+inspect(rules_pruned, by="lift")
+
+
+# Plots
+plot(rules_pruned, method="two-key plot") # The two-key plot uses support and confidence on x and y-axis respectively. It uses order for coloring. The order is the number of items in the rule.
+plot(rules_pruned, method="grouped")
+plot(rules_pruned, method="graph")
+plot(rules_pruned, method="grouped matrix")
+plot(rules_pruned, method="matrix3D")
+plot(rules_pruned, method="paracoord", control = list(reorder = TRUE))
+```
+
+# Rules for LHS(All the variables) vs RHS(Hotel - City)
+```{r}
+rules <- apriori(trans,parameter=list(minlen=4,maxlen=5, support=.005, confidence=.9), control = list(verbose=F),appearance = list(rhs=c("hotel=City Hotel"),default="lhs"))
+
+summary(rules)
+rules_lift <- sort(rules, by="lift")
+# plot(rules_lift, method="grouped matrix")
+rules_pruned <- rules_lift[!is.redundant(rules_lift, measure="lift")]
+rules_pruned <- rules_pruned[quality(rules_pruned)$lift>1.475]
+summary(rules_pruned)
+
+length(rules_pruned)
+inspect(rules_pruned, by="lift")
+
+
+# Plots
+
+plot(rules_pruned, method="grouped matrix")
+# plot(rules_pruned, method="grouped")
+# plot(rules_pruned, method="graph")
+# plot(rules_pruned, method="matrix3D")
+# plot(rules_pruned, method="two-key plot") # The two-key plot uses support and confidence on x and y-axis respectively. It uses order for coloring. The order is the number of items in the rule.
+# plot(rules_pruned, method="paracoord", control = list(reorder = TRUE))
+```
+
+# Rules for LHS(Cancellation related variables) vs RHS(Hotel - City)
+```{r}
+trans_cancel <- as(bookings[bookings$hotel == "City Hotel", ], "transactions")
+
+rules <- apriori(trans_cancel,parameter=list(minlen=4,maxlen=5, support=.005, confidence=.9), control = list(verbose=F),appearance = list(rhs=c("is_canceled=Yes"),default="lhs"))
+
+summary(rules)
+rules_lift <- sort(rules, by="lift")
+# plot(rules_lift, method="grouped matrix")
+rules_pruned <- rules_lift[!is.redundant(rules_lift, measure="lift")]
+rules_pruned <- rules_pruned[quality(rules_pruned)$lift>2.40507]
+summary(rules_pruned)
+
+length(rules_pruned)
+inspect(rules_pruned, by="lift")
+
+# Plots
+plot(rules_pruned, method="grouped matrix")
+# plot(rules_pruned, method="grouped")
+# plot(rules_pruned, method="graph")
+# plot(rules_pruned, method="matrix3D")
+# plot(rules_pruned, method="two-key plot") # The two-key plot uses support and confidence on x and y-axis respectively. It uses order for coloring. The order is the number of items in the rule.
+# plot(rules_pruned, method="paracoord", control = list(reorder = TRUE))
+```
+
+# Rules for LHS(All the variables) vs RHS(Hotel - Resort)
+```{r}
+
+rules <- apriori(trans,parameter=list(minlen=4,maxlen=5, support=.005, confidence=.9), control = list(verbose=F),appearance = list(rhs=c("hotel=Resort Hotel"),default="lhs"))
+
+summary(rules)
+rules_lift <- sort(rules, by="lift")
+# plot(rules_lift, method="grouped matrix")
+rules_pruned <- rules_lift[!is.redundant(rules_lift, measure="lift")]
+rules_pruned <- rules_pruned[quality(rules_pruned)$lift>3.0]
+summary(rules_pruned)
+
+length(rules_pruned)
+inspect(rules_pruned, by="lift")
+
+
+# Plots
+plot(rules_pruned, method="two-key plot") # The two-key plot uses support and confidence on x and y-axis respectively. It uses order for coloring. The order is the number of items in the rule.
+plot(rules_pruned, method="grouped")
+plot(rules_pruned, method="graph")
+plot(rules_pruned, method="grouped matrix")
+plot(rules_pruned, method="matrix3D")
+plot(rules_pruned, method="paracoord", control = list(reorder = TRUE))
+```
+
+# Rules for LHS(Cancellation related variables) vs RHS(customer_type - Transient Party(Family, friends))
+```{r}
+trans_cancel <- as(bookings[bookings$is_canceled == "Yes", ], "transactions")
+
+rules <- apriori(trans_cancel,parameter=list(minlen=2,maxlen=5, support=.005, confidence=.9), control = list(verbose=F),appearance = list(rhs=c("customer_type=Contract", "customer_type=Group", "customer_type=Transient","customer_type=Transient-Party"),default="lhs"))
+
+summary(rules)
+rules_lift <- sort(rules, by="lift")
+# plot(rules_lift, method="grouped matrix")
+rules_pruned <- rules_lift[!is.redundant(rules_lift, measure="lift")]
+rules_pruned <- rules_pruned[quality(rules_pruned)$lift>3 & quality(rules_pruned)$lift<30 ]
+summary(rules_pruned)
+length(rules_pruned)
+inspect(rules_pruned, by="lift")
+
+
+# Plots
+plot(rules_pruned, method="two-key plot") # The two-key plot uses support and confidence on x and y-axis respectively. It uses order for coloring. The order is the number of items in the rule.
+plot(rules_pruned, method="grouped")
+plot(rules_pruned, method="graph")
+plot(rules_pruned, method="grouped matrix")
+plot(rules_pruned, method="matrix3D")
+plot(rules_pruned, method="paracoord", control = list(reorder = TRUE))
+```
+
+# Rules for LHS(Cancellation related variables) vs RHS(customer_type - Contract (Company or Government))
+```{r}
+trans_cancel <- as(bookings[bookings$is_canceled == "Yes", ], "transactions")
+
+rules <- apriori(trans_cancel,parameter=list(minlen=2,maxlen=5, support=.005, confidence=.5), control = list(verbose=F),appearance = list(rhs=c("customer_type=Contract"),default="lhs"))
+
+summary(rules)
+rules_lift <- sort(rules, by="lift")
+# plot(rules_lift, method="grouped matrix")
+rules_pruned <- rules_lift[!is.redundant(rules_lift, measure="lift")]
+rules_pruned <- rules_pruned[quality(rules_pruned)$lift>3 & quality(rules_pruned)$lift<30 ]
+summary(rules_pruned)
+length(rules_pruned)
+inspect(rules_pruned, by="lift")
+
+
+# Plots
+plot(rules_pruned, method="two-key plot") # The two-key plot uses support and confidence on x and y-axis respectively. It uses order for coloring. The order is the number of items in the rule.
+plot(rules_pruned, method="grouped")
+plot(rules_pruned, method="graph")
+plot(rules_pruned, method="grouped matrix")
+plot(rules_pruned, method="matrix3D")
+plot(rules_pruned, method="paracoord", control = list(reorder = TRUE))
+```
+
+
+
+# Rules for LHS(Time related variables) vs RHS(ADR)
+```{r}
+rules <- apriori(trans,parameter=list(minlen=2,maxlen=5, support=.0005, confidence=.7), control = list(verbose=F),appearance = list(rhs=c("adr=Low","adr=Medium","adr=High"), lhs=c("stays_in_week_nights=Low","stays_in_week_nights=Medium","stays_in_week_nights=High", "stays_in_weekend_nights=0","stays_in_weekend_nights=1", "stays_in_weekend_nights=2",  "stays_in_weekend_nights=3","stays_in_weekend_nights=4", "arrival_date_month=Spring","arrival_date_month=Summer","arrival_date_month=Fall","arrival_date_month=Winter","weekday=Monday", "weekday=Tuesday","weekday=Wednesday","weekday=Thursday","weekday=Friday","weekday=Saturday","weekday=Sunday"),default="none"))
+                                                                                                              
+                                                                                                              
+summary(rules)
+plot(rules, method="grouped matrix")
+
+rules_lift <- sort(rules, by="lift")
+rules_pruned <- rules_lift[!is.redundant(rules_lift, measure="lift")]
+rules_pruned <- rules_pruned[quality(rules_pruned)$lift > 2.95]
+
+length(rules_pruned)
+inspect(rules_pruned, by="lift")
+
+
+# Plots
+plot(rules_pruned, method="two-key plot") # The two-key plot uses support and confidence on x and y-axis respectively. It uses order for coloring. The order is the number of items in the rule.
+plot(rules_pruned, method="grouped")
+plot(rules_pruned, method="graph")
+plot(rules_pruned, method="grouped matrix")
+plot(rules_pruned, method="matrix3D")
+plot(rules_pruned, method="paracoord", control = list(reorder = TRUE))
+```
+
+# Rules for LHS(Reservation type) vs RHS(ADR)
+```{r}
+rules <- apriori(trans,parameter=list(minlen=2,maxlen=5, support=.0005, confidence=.7), control = list(verbose=F),appearance = list(rhs=c("adr=Low","adr=Medium","adr=High"), lhs=c("market_segment=Aviation","market_segment=Complementary", "market_segment=Corporate", "market_segment=Direct", "market_segment=Groups", "market_segment=Offline TA/TO", "market_segment=Online TA", "customer_type=Contract", "customer_type=Group", "customer_type=Transient","customer_type=Transient-Party","reserved_room_type=A","reserved_room_type=B","reserved_room_type=C","reserved_room_type=D","reserved_room_type=E","reserved_room_type=F", "reserved_room_type=G", "reserved_room_type=H", "reserved_room_type=L", "reserved_room_type=P", "distribution_channel=Corporate","distribution_channel=Direct", "distribution_channel=GDS", "distribution_channel=TA/TO", "hotel=Resort Hotel","hotel=City Hotel"),default="none"))
+                                                                                                          
+                                                                                                           
+summary(rules)
+plot(rules, method="grouped matrix")
+
+rules_lift <- sort(rules, by="lift")
+rules_pruned <- rules_lift[!is.redundant(rules_lift, measure="lift")]
+rules_pruned <- rules_pruned[quality(rules_pruned)$lift > 2.5]
+
+length(rules_pruned)
+inspect(rules_pruned, by="lift")
+
+
+# Plots
+plot(rules_pruned, method="two-key plot") # The two-key plot uses support and confidence on x and y-axis respectively. It uses order for coloring. The order is the number of items in the rule.
+plot(rules_pruned, method="grouped")
+plot(rules_pruned, method="graph")
+plot(rules_pruned, method="grouped matrix")
+plot(rules_pruned, method="matrix3D")
+plot(rules_pruned, method="paracoord", control = list(reorder = TRUE))
+```
+
+
+
